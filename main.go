@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -25,7 +26,8 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	agent := NewAgent(&client, getUserMessage)
+	tools := []ToolDefinition{}
+	agent := NewAgent(&client, getUserMessage, tools)
 	err := agent.Run(context.TODO())
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
@@ -33,16 +35,22 @@ func main() {
 }
 
 // initialises the agent struct with an anthropic client and a function to get a user message.
-func NewAgent(client *anthropic.Client, getUserMessage func() (string, bool)) *Agent {
+func NewAgent(
+	client *anthropic.Client,
+	getUserMessage func() (string, bool),
+	tools []ToolDefinition,
+) *Agent {
 	return &Agent{
 		client:         client,
 		getUserMessage: getUserMessage,
+		tools:          tools,
 	}
 }
 
 type Agent struct {
 	client         *anthropic.Client
 	getUserMessage func() (string, bool)
+	tools          []ToolDefinition
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -83,10 +91,30 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) runInference(ctx context.Context, conversation []anthropic.MessageParam) (*anthropic.Message, error) {
+	anthropicTools := []anthropic.ToolUnionParam{}
+	// go through each tool defined in our agent, and convert it to the type accepted here.
+	for _, tool := range a.tools {
+		anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
+			OfTool: &anthropic.ToolParam{
+				Name:        tool.Name,
+				Description: anthropic.String(tool.Description),
+				InputSchema: tool.InputSchema,
+			},
+		})
+	}
+
 	message, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaude3_7SonnetLatest,
 		MaxTokens: int64(1024),
 		Messages:  conversation,
+		Tools:     anthropicTools,
 	})
 	return message, err
+}
+
+type ToolDefinition struct {
+	Name        string                         `json:"name`
+	Description string                         `json:"description"`
+	InputSchema anthropic.ToolInputSchemaParam `json:"input_schema"`
+	Function    func(input json.RawMessage) (string, error)
 }
