@@ -46,25 +46,22 @@ func LoadDynamicTools(configPath string) ([]ToolDefinition, error) {
 
 // createDynamicToolDefinition converts a DynamicTool config into a ToolDefinition
 func createDynamicToolDefinition(config DynamicTool) (ToolDefinition, error) {
-	// Generate a dynamic schema based on the parameters
-	schema := anthropic.ToolInputSchemaParam{
-		Properties: map[string]interface{}{},
-	}
-
-	required := []string{}
+	// For simplicity, we'll use a map-based schema directly
+	// We don't need the full JSON Schema features
+	properties := make(map[string]interface{})
+	
+	// Define parameters as properties
 	for _, param := range config.Parameters {
-		schema.Properties[param.Name] = map[string]interface{}{
+		properties[param.Name] = map[string]interface{}{
 			"type":        "string",
 			"description": param.Description,
 		}
-		
-		if param.Required {
-			required = append(required, param.Name)
-		}
 	}
-
-	if len(required) > 0 {
-		schema.Required = required
+	
+	// Create a simple schema without required fields
+	// This is a workaround to avoid compatibility issues
+	schema := anthropic.ToolInputSchemaParam{
+		Properties: properties,
 	}
 
 	// Create the executor function that will handle this tool
