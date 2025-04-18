@@ -1,0 +1,156 @@
+# Claude Go Agent Tutorial
+
+This tutorial explains how to use the Claude Go Agent, a command-line interface for interacting with Claude AI while providing it access to your local filesystem.
+
+## Getting Started
+
+### Prerequisites
+
+- Go 1.24+ installed
+- An Anthropic API key set in the environment (export ANTHROPIC_API_KEY=your_key_here)
+
+### Running the Agent
+
+```bash
+go run main.go
+```
+
+To enable debug mode (showing tool responses):
+
+```bash
+DEBUG=1 go run main.go
+```
+
+## Available Tools
+
+The agent comes with several built-in tools that Claude can use to interact with your filesystem.
+
+### Reading Files
+
+Claude can read the contents of files using the `read_file` tool:
+
+```
+read_file({"path": "path/to/file.txt"})
+```
+
+This reads and returns the content of the specified file. The path should be relative to the current directory.
+
+### Listing Files
+
+Claude can list files and directories using the `list_files` tool:
+
+```
+list_files({"path": "path/to/directory"})
+```
+
+This returns a JSON array of files and directories at the specified path. By default, it excludes:
+- `.git` directory
+- Hidden files (starting with `.`)
+- Common large directories like `node_modules`, `vendor`, `dist`, etc.
+
+#### Advanced Filtering Options
+
+The `list_files` tool supports advanced filtering:
+
+```
+list_files({
+  "path": "path/to/directory",
+  "include_git": true,
+  "include_hidden": true,
+  "exclude": ["node_modules", "dist"]
+})
+```
+
+- `include_git`: Set to `true` to include the `.git` directory
+- `include_hidden`: Set to `true` to include hidden files and directories
+- `exclude`: Array of patterns to exclude from the results
+
+### Searching in Files
+
+Claude can search for patterns in files using the `grep` tool:
+
+```
+grep({"pattern": "function main", "path": "./"})
+```
+
+This performs a regular expression search in all files at the specified path and returns matches with file names and line numbers. The tool uses the same filtering system as `list_files`.
+
+#### Advanced Grep Options
+
+```
+grep({
+  "pattern": "TODO:",
+  "path": "./src",
+  "include_git": false,
+  "include_hidden": true,
+  "exclude": ["generated"]
+})
+```
+
+### Editing Files
+
+Claude can edit files using the `edit_file` tool:
+
+```
+edit_file({
+  "path": "path/to/file.txt",
+  "old_str": "text to replace",
+  "new_str": "replacement text"
+})
+```
+
+This replaces all occurrences of `old_str` with `new_str` in the specified file. If the file doesn't exist and `old_str` is empty, it will create a new file with `new_str` as its content.
+
+## Practical Examples
+
+### Example 1: Finding and Fixing a Bug
+
+Ask Claude to find and fix a bug:
+
+```
+Can you find where error handling might be missing in our code and fix it?
+```
+
+Claude will:
+1. Use `list_files` to see what files are available
+2. Use `grep` to search for patterns that might indicate missing error checks
+3. Use `read_file` to examine suspicious files
+4. Use `edit_file` to fix the issues it finds
+
+### Example 2: Creating a New Feature
+
+Ask Claude to add a new feature:
+
+```
+Can you create a new feature that counts the lines of code in the repository?
+```
+
+Claude will:
+1. Create a new file or modify an existing one using `edit_file`
+2. Implement the line counting functionality
+3. Test the feature by running it
+
+### Example 3: Code Analysis
+
+Ask Claude to analyze your code:
+
+```
+Can you check our codebase for best practices and suggest improvements?
+```
+
+Claude will:
+1. Use `list_files` and `grep` to explore the codebase
+2. Analyze the code structure, patterns, and practices
+3. Provide recommendations for improvements
+
+## Tips and Best Practices
+
+1. **Be Specific**: When asking Claude to make changes, be specific about what you want.
+
+2. **Debug Mode**: Run with `DEBUG=1` to see the raw tool responses, which helps with troubleshooting.
+
+3. **Large Files**: For very large files, Claude might have limitations. Consider specifying which parts to focus on.
+
+4. **Complex Changes**: For complex changes, break them down into smaller steps.
+
+5. **Security**: The agent has access to your local filesystem, so be careful not to run it in sensitive directories unless you trust the implementation.
