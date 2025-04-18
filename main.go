@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -270,7 +269,7 @@ func (f *DefaultPathFilter) ShouldSkipDir(path string) bool {
 }
 
 type ToolDefinition struct {
-	Name        string                         `json:"name`
+	Name        string                         `json:"name"`
 	Description string                         `json:"description"`
 	InputSchema anthropic.ToolInputSchemaParam `json:"input_schema"`
 	Function    func(input json.RawMessage) (string, error)
