@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -30,7 +31,7 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	tools := []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition}
+	tools := []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition, GrepDefinition}
 	agent := NewAgent(&client, getUserMessage, tools)
 	err := agent.Run(context.TODO())
 	if err != nil {
@@ -192,6 +193,14 @@ If the file specified with path doesn't exist, it will be created.
 	Function:    EditFile,
 }
 
+// The grep tool
+var GrepDefinition = ToolDefinition{
+	Name:        "grep",
+	Description: "Search for a regular expression pattern in files. Returns matching lines with file names and line numbers.",
+	InputSchema: GrepInputSchema,
+	Function:    Grep,
+}
+
 type ReadFileInput struct {
 	// the file path input, annotated with a json name and description
 	Path string `json:"path" jsonschema_description:"The relative path of a file in the working directory."`
@@ -204,10 +213,15 @@ type EditFileInput struct {
 	OldStr string `json:"old_str" jsonschema_description:"Text to search for - must match exactly and must only have one match exactly"`
 	NewStr string `json:"new_str" jsonschema_description:"Text to replace old_str with"`
 }
+type GrepInput struct {
+	Pattern string `json:"pattern" jsonschema_description:"The regular expression pattern to search for in files"`
+	Path    string `json:"path,omitempty" jsonschema_description:"Optional relative path to search in. Defaults to current directory if not provided"`
+}
 
 var ReadFileInputSchema = GenerateSchema[ReadFileInput]()
 var ListFilesInputSchema = GenerateSchema[ListFilesInput]()
 var EditFileInputSchema = GenerateSchema[EditFileInput]()
+var GrepInputSchema = GenerateSchema[GrepInput]()
 
 // generics magic?
 func GenerateSchema[T any]() anthropic.ToolInputSchemaParam {
@@ -335,4 +349,97 @@ func createNewFile(filePath, content string) (string, error) {
 	}
 
 	return fmt.Sprintf("Successfully created file %s", filePath), nil
+}
+
+func Grep(input json.RawMessage) (string, error) {
+	grepInput := GrepInput{}
+	err := json.Unmarshal(input, &grepInput)
+	if err != nil {
+		return "", err
+	}
+
+	if grepInput.Pattern == "" {
+		return "", fmt.Errorf("pattern cannot be empty")
+	}
+
+	// Compile the regular expression
+	regex, err := regexp.Compile(grepInput.Pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regular expression: %w", err)
+	}
+
+	// Set the search directory
+	searchDir := "."
+	if grepInput.Path != "" {
+		searchDir = grepInput.Path
+	}
+
+	// Store matches as a slice of map entries for JSON serialization
+	type Match struct {
+		File    string `json:"file"`
+		Line    int    `json:"line"`
+		Content string `json:"content"`
+	}
+	matches := []Match{}
+
+	// Walk through all files in the directory
+	err = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Read the file
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil // Skip files we can't read
+		}
+
+		// Skip binary files (simple check)
+		if len(data) > 0 && data[0] == 0 {
+			return nil
+		}
+
+		// Process the file line by line
+		scanner := bufio.NewScanner(strings.NewReader(string(data)))
+		lineNum := 0
+		for scanner.Scan() {
+			lineNum++
+			line := scanner.Text()
+			if regex.MatchString(line) {
+				// Get relative path
+				relPath, err := filepath.Rel(searchDir, path)
+				if err != nil {
+					relPath = path
+				}
+				matches = append(matches, Match{
+					File:    relPath,
+					Line:    lineNum,
+					Content: line,
+				})
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if len(matches) == 0 {
+		return "No matches found.", nil
+	}
+
+	// Convert to JSON
+	result, err := json.MarshalIndent(matches, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	return string(result), nil
 }
