@@ -1,0 +1,45 @@
+{
+  "tools": [
+    {
+      "name": "git_status",
+      "description": "Shows the working tree status. Lists changed files, staged changes, and untracked files.",
+      "command": "git status",
+      "timeout": 30,
+      "parameters": []
+    },
+    {
+      "name": "npm_install",
+      "description": "Install NPM dependencies specified in package.json file.",
+      "command": "npm install",
+      "timeout": 120,
+      "parameters": []
+    },
+    {
+      "name": "go_test",
+      "description": "Run Go tests in the specified package. If no package is specified, runs all tests.",
+      "command": "go test {{.package}}",
+      "timeout": 60,
+      "parameters": [
+        {
+          "name": "package",
+          "description": "The package to test. Use ./... for all packages.",
+          "required": false,
+          "default": "./..."
+        }
+      ]
+    },
+    {
+      "name": "fetch_url",
+      "description": "Fetch contents from a URL using curl.",
+      "command": "curl -s {{.url}}",
+      "timeout": 30,
+      "parameters": [
+        {
+          "name": "url",
+          "description": "The URL to fetch.",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

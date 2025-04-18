@@ -12,11 +12,119 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
 )
+
+// LoadDynamicTools loads tool definitions from a configuration file
+func LoadDynamicTools(configPath string) ([]ToolDefinition, error) {
+	configFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read tools config file: %w", err)
+	}
+
+	var config DynamicToolConfig
+	if err := json.Unmarshal(configFile, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse tools config: %w", err)
+	}
+
+	tools := make([]ToolDefinition, 0, len(config.Tools))
+	for _, dynTool := range config.Tools {
+		toolDef, err := createDynamicToolDefinition(dynTool)
+		if err != nil {
+			fmt.Printf("Warning: Failed to create tool %s: %v\n", dynTool.Name, err)
+			continue
+		}
+		tools = append(tools, toolDef)
+	}
+
+	return tools, nil
+}
+
+// createDynamicToolDefinition converts a DynamicTool config into a ToolDefinition
+func createDynamicToolDefinition(config DynamicTool) (ToolDefinition, error) {
+	// Generate a dynamic schema based on the parameters
+	schema := anthropic.ToolInputSchemaParam{
+		Properties: map[string]interface{}{},
+	}
+
+	required := []string{}
+	for _, param := range config.Parameters {
+		schema.Properties[param.Name] = map[string]interface{}{
+			"type":        "string",
+			"description": param.Description,
+		}
+		
+		if param.Required {
+			required = append(required, param.Name)
+		}
+	}
+
+	if len(required) > 0 {
+		schema.Required = required
+	}
+
+	// Create the executor function that will handle this tool
+	executor := func(input json.RawMessage) (string, error) {
+		// Parse the input as a map
+		var params map[string]interface{}
+		if err := json.Unmarshal(input, &params); err != nil {
+			return "", fmt.Errorf("invalid input: %w", err)
+		}
+
+		// Process the command template
+		cmdTemplate, err := template.New("command").Parse(config.Command)
+		if err != nil {
+			return "", fmt.Errorf("invalid command template: %w", err)
+		}
+
+		// Prepare the template data
+		templateData := make(map[string]interface{})
+		
+		// Apply defaults and check required parameters
+		for _, param := range config.Parameters {
+			if value, exists := params[param.Name]; exists {
+				// Parameter was provided in the input
+				templateData[param.Name] = value
+			} else if param.Default != "" {
+				// Use default value
+				templateData[param.Name] = param.Default
+			} else if param.Required {
+				// Parameter is required but not provided
+				return "", fmt.Errorf("missing required parameter: %s", param.Name)
+			}
+		}
+
+		// Execute the template to get the final command
+		var cmdBuffer bytes.Buffer
+		if err := cmdTemplate.Execute(&cmdBuffer, templateData); err != nil {
+			return "", fmt.Errorf("failed to process command template: %w", err)
+		}
+		command := cmdBuffer.String()
+
+		// Set timeout
+		timeout := config.Timeout
+		if timeout <= 0 {
+			timeout = 30 // Default timeout
+		}
+		if timeout > 300 {
+			timeout = 300 // Maximum timeout
+		}
+
+		// Execute the command (reusing our existing ExecuteCommand logic)
+		return ExecuteCommand(json.RawMessage(fmt.Sprintf(`{"command": %q, "timeout": %d}`, command, timeout)))
+	}
+
+	return ToolDefinition{
+		Name:        config.Name,
+		Description: config.Description,
+		InputSchema: schema,
+		Function:    executor,
+	}, nil
+}
 
 func main() {
 	// Check if debug mode is requested
@@ -40,7 +148,18 @@ func main() {
 		return scanner.Text(), true
 	}
 
+	// Start with the built-in tools
 	tools := []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition, GrepDefinition, ExecuteCommandDefinition}
+	
+	// Try to load dynamic tools from config
+	configPath := "tools_config.json"
+	if dynamicTools, err := LoadDynamicTools(configPath); err != nil {
+		fmt.Printf("Warning: Failed to load dynamic tools: %v\n", err)
+	} else {
+		fmt.Printf("Loaded %d dynamic tools from %s\n", len(dynamicTools), configPath)
+		tools = append(tools, dynamicTools...)
+	}
+
 	agent := NewAgent(&client, getUserMessage, tools)
 	err := agent.Run(context.TODO())
 	if err != nil {
@@ -345,6 +464,26 @@ type GrepInput struct {
 type ExecuteCommandInput struct {
 	Command string `json:"command" jsonschema_description:"The shell command to execute (bash on Unix/Linux/macOS, cmd on Windows)"`
 	Timeout int    `json:"timeout,omitempty" jsonschema_description:"Optional timeout in seconds. Default is 30 seconds. Maximum is 300 seconds (5 minutes)."`
+}
+
+// Configuration for dynamic tool loading
+type DynamicToolConfig struct {
+	Tools []DynamicTool `json:"tools"`
+}
+
+type DynamicTool struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Command     string             `json:"command"`
+	Timeout     int                `json:"timeout"`
+	Parameters  []ToolParameter    `json:"parameters"`
+}
+
+type ToolParameter struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+	Default     string `json:"default,omitempty"`
 }
 
 var ReadFileInputSchema = GenerateSchema[ReadFileInput]()

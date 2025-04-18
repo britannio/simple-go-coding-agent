@@ -119,6 +119,49 @@ The output is returned as a JSON object containing:
 - `stderr`: Standard error output from the command
 - `exit_code`: The command's exit code (0 typically means success)
 
+### Dynamic Custom Tools
+
+The agent supports dynamically loading custom tools from a configuration file (`tools_config.json`). These tools are backed by shell commands but appear as first-class tools to Claude.
+
+Example configuration:
+
+```json
+{
+  "tools": [
+    {
+      "name": "git_status",
+      "description": "Shows the working tree status. Lists changed files, staged changes, and untracked files.",
+      "command": "git status",
+      "timeout": 30,
+      "parameters": []
+    },
+    {
+      "name": "go_test",
+      "description": "Run Go tests in the specified package. If no package is specified, runs all tests.",
+      "command": "go test {{.package}}",
+      "timeout": 60,
+      "parameters": [
+        {
+          "name": "package",
+          "description": "The package to test. Use ./... for all packages.",
+          "required": false,
+          "default": "./..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each dynamic tool configuration must include:
+- `name`: The tool's name (used to invoke it)
+- `description`: A description of what the tool does
+- `command`: The command template to execute
+- `timeout`: Maximum execution time in seconds
+- `parameters`: List of parameters the tool accepts
+
+Parameters can be templated into the command using Go template syntax (`{{.paramName}}`). Required parameters must be provided, while optional parameters will use their default value if not specified.
+
 #### Examples
 
 List directory contents:
@@ -208,3 +251,5 @@ Claude will:
 5. **Security**: The agent has access to your local filesystem and can execute commands, so be careful not to run it in sensitive directories unless you trust the implementation.
 
 6. **Command Execution**: Be cautious when using the execute tool, as it runs commands with the same permissions as the user running the agent.
+
+7. **Dynamic Tools**: The agent can load custom tools from the `tools_config.json` file. These tools are automatically registered at startup.
