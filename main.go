@@ -16,6 +16,12 @@ import (
 )
 
 func main() {
+	// Check if debug mode is requested
+	debug := os.Getenv("DEBUG") == "1"
+	if debug {
+		fmt.Println("Debug mode enabled. Tool responses will be printed to the terminal.")
+	}
+
 	// Anthropic Client
 	client := anthropic.NewClient()
 
@@ -45,10 +51,14 @@ func NewAgent(
 	getUserMessage func() (string, bool),
 	tools []ToolDefinition,
 ) *Agent {
+	// Check if DEBUG environment variable is set
+	debugMode := os.Getenv("DEBUG") == "1"
+
 	return &Agent{
 		client:         client,
 		getUserMessage: getUserMessage,
 		tools:          tools,
+		debugMode:      debugMode,
 	}
 }
 
@@ -56,6 +66,7 @@ type Agent struct {
 	client         *anthropic.Client
 	getUserMessage func() (string, bool)
 	tools          []ToolDefinition
+	debugMode      bool
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -130,9 +141,20 @@ func (a *Agent) executeTool(id, name string, input json.RawMessage) anthropic.Co
 	fmt.Printf("\u001b[92mtool\u001b[0m: %s(%s)\n", name, input)
 	// execute the tool
 	response, err := toolDef.Function(input)
+	
+	// If debug mode is enabled, print the tool response or error
+	if a.debugMode {
+		if err != nil {
+			fmt.Printf("\u001b[96mdebug\u001b[0m: Tool error: %s\n", err.Error())
+		} else {
+			fmt.Printf("\u001b[96mdebug\u001b[0m: Tool response: %s\n", response)
+		}
+	}
+	
 	if err != nil {
 		return anthropic.NewToolResultBlock(id, err.Error(), true)
 	}
+	
 	return anthropic.NewToolResultBlock(id, response, false)
 }
 
