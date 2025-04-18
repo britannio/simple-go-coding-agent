@@ -198,7 +198,7 @@ var ReadFileDefinition = ToolDefinition{
 // The list files tool
 var ListFilesDefinition = ToolDefinition{
 	Name:        "list_files",
-	Description: "List files and directories at a given path. If no path is provided, lists files in the current directory.",
+	Description: "List files and directories at a given path. If no path is provided, lists files in the current directory. Excludes .git directory by default unless include_git is set to true.",
 	InputSchema: ListFilesInputSchema,
 	Function:    ListFiles,
 }
@@ -218,7 +218,7 @@ If the file specified with path doesn't exist, it will be created.
 // The grep tool
 var GrepDefinition = ToolDefinition{
 	Name:        "grep",
-	Description: "Search for a regular expression pattern in files. Returns matching lines with file names and line numbers.",
+	Description: "Search for a regular expression pattern in files. Returns matching lines with file names and line numbers. Excludes .git directory by default unless include_git is set to true.",
 	InputSchema: GrepInputSchema,
 	Function:    Grep,
 }
@@ -228,7 +228,8 @@ type ReadFileInput struct {
 	Path string `json:"path" jsonschema_description:"The relative path of a file in the working directory."`
 }
 type ListFilesInput struct {
-	Path string `json:"path,omitempty" jsonschema_description:"Optional relative path to list files from. Defaults to current directory if not provided."`
+	Path       string `json:"path,omitempty" jsonschema_description:"Optional relative path to list files from. Defaults to current directory if not provided."`
+	IncludeGit bool   `json:"include_git,omitempty" jsonschema_description:"Set to true to include .git directory in results. Defaults to false."`
 }
 type EditFileInput struct {
 	Path   string `json:"path" jsonschema_description:"The path to the file"`
@@ -236,8 +237,9 @@ type EditFileInput struct {
 	NewStr string `json:"new_str" jsonschema_description:"Text to replace old_str with"`
 }
 type GrepInput struct {
-	Pattern string `json:"pattern" jsonschema_description:"The regular expression pattern to search for in files"`
-	Path    string `json:"path,omitempty" jsonschema_description:"Optional relative path to search in. Defaults to current directory if not provided"`
+	Pattern    string `json:"pattern" jsonschema_description:"The regular expression pattern to search for in files"`
+	Path       string `json:"path,omitempty" jsonschema_description:"Optional relative path to search in. Defaults to current directory if not provided"`
+	IncludeGit bool   `json:"include_git,omitempty" jsonschema_description:"Set to true to include .git directory in search. Defaults to false."`
 }
 
 var ReadFileInputSchema = GenerateSchema[ReadFileInput]()
@@ -298,6 +300,17 @@ func ListFiles(input json.RawMessage) (string, error) {
 		relPath, err := filepath.Rel(dir, path)
 		if err != nil {
 			return err
+		}
+
+		// Skip the .git directory unless explicitly requested
+		if !listFilesInput.IncludeGit {
+			// Check if this is the .git directory or a file inside it
+			if relPath == ".git" || strings.HasPrefix(relPath, ".git"+string(os.PathSeparator)) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 
 		if relPath != "." {
@@ -410,6 +423,22 @@ func Grep(input json.RawMessage) (string, error) {
 			return err
 		}
 
+		// Get relative path
+		relPath, err := filepath.Rel(searchDir, path)
+		if err != nil {
+			return err
+		}
+		
+		// Skip the .git directory unless explicitly requested
+		if !grepInput.IncludeGit {
+			if relPath == ".git" || strings.HasPrefix(relPath, ".git"+string(os.PathSeparator)) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
 		// Skip directories
 		if info.IsDir() {
 			return nil
@@ -433,11 +462,6 @@ func Grep(input json.RawMessage) (string, error) {
 			lineNum++
 			line := scanner.Text()
 			if regex.MatchString(line) {
-				// Get relative path
-				relPath, err := filepath.Rel(searchDir, path)
-				if err != nil {
-					relPath = path
-				}
 				matches = append(matches, Match{
 					File:    relPath,
 					Line:    lineNum,
