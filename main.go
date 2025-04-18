@@ -2,14 +2,18 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
@@ -37,7 +41,7 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	tools := []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition, GrepDefinition}
+	tools := []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition, GrepDefinition, ExecuteCommandDefinition}
 	agent := NewAgent(&client, getUserMessage, tools)
 	err := agent.Run(context.TODO())
 	if err != nil {
@@ -308,6 +312,14 @@ var GrepDefinition = ToolDefinition{
 	Function:    Grep,
 }
 
+// The execute command tool
+var ExecuteCommandDefinition = ToolDefinition{
+	Name:        "execute",
+	Description: "Execute a shell command and return its output. The command is executed in a bash shell on Unix-like systems and cmd on Windows. Has a configurable timeout (default 30 seconds, max 5 minutes). Returns stdout, stderr, and exit code.",
+	InputSchema: ExecuteCommandInputSchema,
+	Function:    ExecuteCommand,
+}
+
 type ReadFileInput struct {
 	// the file path input, annotated with a json name and description
 	Path string `json:"path" jsonschema_description:"The relative path of a file in the working directory."`
@@ -331,10 +343,16 @@ type GrepInput struct {
 	Exclude       []string `json:"exclude,omitempty" jsonschema_description:"Optional list of directories or files to exclude from search."`
 }
 
+type ExecuteCommandInput struct {
+	Command string `json:"command" jsonschema_description:"The shell command to execute (bash on Unix/Linux/macOS, cmd on Windows)"`
+	Timeout int    `json:"timeout,omitempty" jsonschema_description:"Optional timeout in seconds. Default is 30 seconds. Maximum is 300 seconds (5 minutes)."`
+}
+
 var ReadFileInputSchema = GenerateSchema[ReadFileInput]()
 var ListFilesInputSchema = GenerateSchema[ListFilesInput]()
 var EditFileInputSchema = GenerateSchema[EditFileInput]()
 var GrepInputSchema = GenerateSchema[GrepInput]()
+var ExecuteCommandInputSchema = GenerateSchema[ExecuteCommandInput]()
 
 // generics magic?
 func GenerateSchema[T any]() anthropic.ToolInputSchemaParam {
@@ -591,4 +609,85 @@ func Grep(input json.RawMessage) (string, error) {
 	}
 
 	return string(result), nil
+}
+
+func ExecuteCommand(input json.RawMessage) (string, error) {
+	executeCommandInput := ExecuteCommandInput{}
+	err := json.Unmarshal(input, &executeCommandInput)
+	if err != nil {
+		return "", err
+	}
+
+	if executeCommandInput.Command == "" {
+		return "", fmt.Errorf("command cannot be empty")
+	}
+
+	// Set default timeout if not specified
+	timeout := 30
+	if executeCommandInput.Timeout > 0 {
+		timeout = executeCommandInput.Timeout
+	}
+	// Cap timeout at 5 minutes
+	if timeout > 300 {
+		timeout = 300
+	}
+
+	// Define shell to use based on OS
+	var cmd *exec.Cmd
+	if os.PathSeparator == '/' { // Unix-like
+		cmd = exec.Command("bash", "-c", executeCommandInput.Command)
+	} else { // Windows
+		cmd = exec.Command("cmd", "/C", executeCommandInput.Command)
+	}
+
+	// Capture stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	// Make the command use the context
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Run the command
+	err = cmd.Run()
+
+	// Create a structured response with both stdout and stderr
+	type CommandResult struct {
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		ExitCode int    `json:"exit_code"`
+	}
+
+	exitCode := 0
+	if err != nil {
+		// Try to get the exit code
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("command timed out after %d seconds", timeout)
+		} else {
+			return "", fmt.Errorf("failed to execute command: %w", err)
+		}
+	}
+
+	// Create the result
+	result := CommandResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+	}
+
+	// Convert to JSON
+	resultJson, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	return string(resultJson), nil
 }

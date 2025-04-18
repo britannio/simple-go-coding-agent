@@ -101,6 +101,44 @@ edit_file({
 
 This replaces all occurrences of `old_str` with `new_str` in the specified file. If the file doesn't exist and `old_str` is empty, it will create a new file with `new_str` as its content.
 
+### Executing Commands
+
+Claude can execute shell commands using the `execute` tool:
+
+```
+execute({
+  "command": "ls -la",
+  "timeout": 30
+})
+```
+
+This executes the specified command in a shell environment and returns the output. The `timeout` parameter is optional and defaults to 30 seconds (maximum 300 seconds).
+
+The output is returned as a JSON object containing:
+- `stdout`: Standard output from the command
+- `stderr`: Standard error output from the command
+- `exit_code`: The command's exit code (0 typically means success)
+
+#### Examples
+
+List directory contents:
+```
+execute({"command": "ls -la"})
+```
+
+Check Git status:
+```
+execute({"command": "git status"})
+```
+
+Run a script with a longer timeout:
+```
+execute({
+  "command": "./long_running_script.sh",
+  "timeout": 120
+})
+```
+
 ## Practical Examples
 
 ### Example 1: Finding and Fixing a Bug
@@ -143,6 +181,20 @@ Claude will:
 2. Analyze the code structure, patterns, and practices
 3. Provide recommendations for improvements
 
+### Example 4: Running Tests and Building the Project
+
+Ask Claude to run tests and build the project:
+
+```
+Can you run our test suite and build the project?
+```
+
+Claude will:
+1. Use `execute` to run test commands (e.g., `go test ./...` or `npm test`)
+2. Fix any failing tests using `read_file` and `edit_file`
+3. Use `execute` to build the project
+4. Report the results
+
 ## Tips and Best Practices
 
 1. **Be Specific**: When asking Claude to make changes, be specific about what you want.
@@ -153,4 +205,6 @@ Claude will:
 
 4. **Complex Changes**: For complex changes, break them down into smaller steps.
 
-5. **Security**: The agent has access to your local filesystem, so be careful not to run it in sensitive directories unless you trust the implementation.
+5. **Security**: The agent has access to your local filesystem and can execute commands, so be careful not to run it in sensitive directories unless you trust the implementation.
+
+6. **Command Execution**: Be cautious when using the execute tool, as it runs commands with the same permissions as the user running the agent.
