@@ -180,6 +180,91 @@ func (a *Agent) runInference(ctx context.Context, conversation []anthropic.Messa
 	return message, err
 }
 
+// PathFilter defines a reusable interface for filtering files and directories
+type PathFilter interface {
+	// ShouldInclude returns true if the path should be included, false otherwise
+	ShouldInclude(path string, isDir bool) bool
+	// ShouldSkipDir returns true if the directory should be skipped entirely
+	ShouldSkipDir(path string) bool
+}
+
+// DefaultPathFilter implements basic filtering with common exclusions
+type DefaultPathFilter struct {
+	// IncludeGit determines whether .git directories should be included
+	IncludeGit bool
+	// IncludeHidden determines whether hidden files (starting with .) should be included
+	IncludeHidden bool
+	// CustomExcludes contains additional patterns to exclude
+	CustomExcludes []string
+}
+
+// NewDefaultPathFilter creates a new filter with sensible defaults
+func NewDefaultPathFilter() *DefaultPathFilter {
+	return &DefaultPathFilter{
+		IncludeGit:    false,
+		IncludeHidden: false,
+		CustomExcludes: []string{
+			// Common binary or large file directories
+			"node_modules",
+			"vendor",
+			"dist",
+			"build",
+			".venv",
+			"__pycache__",
+		},
+	}
+}
+
+// ShouldInclude checks if a path should be included based on the filter settings
+func (f *DefaultPathFilter) ShouldInclude(path string, isDir bool) bool {
+	// Extract the base name for comparison
+	base := filepath.Base(path)
+
+	// Skip .git directory unless explicitly included
+	if !f.IncludeGit && (base == ".git" || strings.Contains(path, string(os.PathSeparator)+".git"+string(os.PathSeparator))) {
+		return false
+	}
+
+	// Skip hidden files/directories if not included
+	if !f.IncludeHidden && strings.HasPrefix(base, ".") && base != "." {
+		return false
+	}
+
+	// Check custom exclusions
+	for _, exclude := range f.CustomExcludes {
+		// Simple matching for now, could be extended to use glob patterns
+		if base == exclude || strings.Contains(path, string(os.PathSeparator)+exclude+string(os.PathSeparator)) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// ShouldSkipDir checks if directory traversal should skip this directory
+func (f *DefaultPathFilter) ShouldSkipDir(path string) bool {
+	base := filepath.Base(path)
+
+	// Always skip .git directory traversal unless explicitly included
+	if !f.IncludeGit && base == ".git" {
+		return true
+	}
+
+	// Skip hidden directories if not included
+	if !f.IncludeHidden && strings.HasPrefix(base, ".") && base != "." {
+		return true
+	}
+
+	// Skip directories in the custom exclude list
+	for _, exclude := range f.CustomExcludes {
+		if base == exclude {
+			return true
+		}
+	}
+
+	return false
+}
+
 type ToolDefinition struct {
 	Name        string                         `json:"name`
 	Description string                         `json:"description"`
@@ -198,7 +283,7 @@ var ReadFileDefinition = ToolDefinition{
 // The list files tool
 var ListFilesDefinition = ToolDefinition{
 	Name:        "list_files",
-	Description: "List files and directories at a given path. If no path is provided, lists files in the current directory. Excludes .git directory by default unless include_git is set to true.",
+	Description: "List files and directories at a given path. If no path is provided, lists files in the current directory. By default excludes .git directory, hidden files, and common directories like node_modules. Use include_git, include_hidden, and exclude parameters to customize filtering.",
 	InputSchema: ListFilesInputSchema,
 	Function:    ListFiles,
 }
@@ -218,7 +303,7 @@ If the file specified with path doesn't exist, it will be created.
 // The grep tool
 var GrepDefinition = ToolDefinition{
 	Name:        "grep",
-	Description: "Search for a regular expression pattern in files. Returns matching lines with file names and line numbers. Excludes .git directory by default unless include_git is set to true.",
+	Description: "Search for a regular expression pattern in files. Returns matching lines with file names and line numbers. By default excludes .git directory, hidden files, and common directories like node_modules. Use include_git, include_hidden, and exclude parameters to customize filtering.",
 	InputSchema: GrepInputSchema,
 	Function:    Grep,
 }
@@ -228,8 +313,10 @@ type ReadFileInput struct {
 	Path string `json:"path" jsonschema_description:"The relative path of a file in the working directory."`
 }
 type ListFilesInput struct {
-	Path       string `json:"path,omitempty" jsonschema_description:"Optional relative path to list files from. Defaults to current directory if not provided."`
-	IncludeGit bool   `json:"include_git,omitempty" jsonschema_description:"Set to true to include .git directory in results. Defaults to false."`
+	Path          string   `json:"path,omitempty" jsonschema_description:"Optional relative path to list files from. Defaults to current directory if not provided."`
+	IncludeGit    bool     `json:"include_git,omitempty" jsonschema_description:"Set to true to include .git directory in results. Defaults to false."`
+	IncludeHidden bool     `json:"include_hidden,omitempty" jsonschema_description:"Set to true to include hidden files and directories (starting with .). Defaults to false."`
+	Exclude       []string `json:"exclude,omitempty" jsonschema_description:"Optional list of directories or files to exclude from results."`
 }
 type EditFileInput struct {
 	Path   string `json:"path" jsonschema_description:"The path to the file"`
@@ -237,9 +324,11 @@ type EditFileInput struct {
 	NewStr string `json:"new_str" jsonschema_description:"Text to replace old_str with"`
 }
 type GrepInput struct {
-	Pattern    string `json:"pattern" jsonschema_description:"The regular expression pattern to search for in files"`
-	Path       string `json:"path,omitempty" jsonschema_description:"Optional relative path to search in. Defaults to current directory if not provided"`
-	IncludeGit bool   `json:"include_git,omitempty" jsonschema_description:"Set to true to include .git directory in search. Defaults to false."`
+	Pattern       string   `json:"pattern" jsonschema_description:"The regular expression pattern to search for in files"`
+	Path          string   `json:"path,omitempty" jsonschema_description:"Optional relative path to search in. Defaults to current directory if not provided"`
+	IncludeGit    bool     `json:"include_git,omitempty" jsonschema_description:"Set to true to include .git directory in search. Defaults to false."`
+	IncludeHidden bool     `json:"include_hidden,omitempty" jsonschema_description:"Set to true to include hidden files and directories (starting with .). Defaults to false."`
+	Exclude       []string `json:"exclude,omitempty" jsonschema_description:"Optional list of directories or files to exclude from search."`
 }
 
 var ReadFileInputSchema = GenerateSchema[ReadFileInput]()
@@ -291,6 +380,13 @@ func ListFiles(input json.RawMessage) (string, error) {
 		dir = listFilesInput.Path
 	}
 
+	// Create path filter based on user options
+	filter := &DefaultPathFilter{
+		IncludeGit:    listFilesInput.IncludeGit,
+		IncludeHidden: listFilesInput.IncludeHidden,
+		CustomExcludes: listFilesInput.Exclude,
+	}
+
 	var files []string
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -302,18 +398,18 @@ func ListFiles(input json.RawMessage) (string, error) {
 			return err
 		}
 
-		// Skip the .git directory unless explicitly requested
-		if !listFilesInput.IncludeGit {
-			// Check if this is the .git directory or a file inside it
-			if relPath == ".git" || strings.HasPrefix(relPath, ".git"+string(os.PathSeparator)) {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
+		// Skip current directory
+		if relPath == "." {
+			return nil
 		}
 
-		if relPath != "." {
+		// Check if the directory should be skipped entirely
+		if info.IsDir() && filter.ShouldSkipDir(relPath) {
+			return filepath.SkipDir
+		}
+
+		// Check if the file/directory should be included
+		if filter.ShouldInclude(relPath, info.IsDir()) {
 			if info.IsDir() {
 				files = append(files, relPath+"/")
 			} else {
@@ -409,6 +505,13 @@ func Grep(input json.RawMessage) (string, error) {
 		searchDir = grepInput.Path
 	}
 
+	// Create path filter based on user options
+	filter := &DefaultPathFilter{
+		IncludeGit:     grepInput.IncludeGit,
+		IncludeHidden:  grepInput.IncludeHidden,
+		CustomExcludes: grepInput.Exclude,
+	}
+
 	// Store matches as a slice of map entries for JSON serialization
 	type Match struct {
 		File    string `json:"file"`
@@ -429,18 +532,18 @@ func Grep(input json.RawMessage) (string, error) {
 			return err
 		}
 		
-		// Skip the .git directory unless explicitly requested
-		if !grepInput.IncludeGit {
-			if relPath == ".git" || strings.HasPrefix(relPath, ".git"+string(os.PathSeparator)) {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
+		// Skip current directory
+		if relPath == "." {
+			return nil
 		}
 
-		// Skip directories
-		if info.IsDir() {
+		// Check if the directory should be skipped entirely
+		if info.IsDir() && filter.ShouldSkipDir(relPath) {
+			return filepath.SkipDir
+		}
+
+		// Skip directories and files that should not be included
+		if !filter.ShouldInclude(relPath, info.IsDir()) || info.IsDir() {
 			return nil
 		}
 
